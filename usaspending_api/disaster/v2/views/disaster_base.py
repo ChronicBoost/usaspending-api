@@ -10,7 +10,7 @@ from usaspending_api.submissions.helpers import get_last_closed_submission_date
 
 class DisasterBase(APIView):
     required_filters = ["def_codes"]
-    reporting_period_min = "2020-04-01"
+    reporting_period_min = "2018-04-01"
 
     @cached_property
     def filters(self):

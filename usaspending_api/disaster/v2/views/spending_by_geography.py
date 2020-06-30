@@ -10,7 +10,7 @@ from usaspending_api.references.models import PopCounty, PopCongressionalDistric
 from usaspending_api.references.abbreviations import code_to_state, fips_to_code, pad_codes
 from usaspending_api.common.cache_decorator import cache_response
 from usaspending_api.disaster.v2.views.disaster_base import DisasterBase
-from usaspending_api.search.models import LoanAwardSearchMatview
+from usaspending_api.search.models import LoanAwardSearchMatview, AwardSearchMatview, AwardSearchView
 from usaspending_api.common.validator import TinyShield
 from usaspending_api.awards.models import FinancialAccountsByAwards
 from usaspending_api.awards.v2.filters.location_filter_geocode import geocode_filter_locations
@@ -66,7 +66,6 @@ class SpendingByGeographyViewSet(DisasterBase):
 
     @cache_response()
     def post(self, request: Request) -> Response:
-
         models = [
             {
                 "key": "geo_layer_filters",
@@ -129,8 +128,10 @@ class SpendingByGeographyViewSet(DisasterBase):
 
         if self.filters["spending_type"] == "loan":
             self.queryset = self.loan_queryset.filter(geo_filters).values(*values, "amount")
+        elif self.filters["spending_type"] == "outlay":
+            self.queryset = self.outlay_queryset.filter(geo_filters).values(*values, "amount")
         else:
-            raise NotImplementedError
+            self.queryset = self.obligation_queryset.filter(geo_filters).values(*values, "amount")
 
         from usaspending_api.common.helpers.orm_helpers import generate_raw_quoted_query
 
@@ -217,13 +218,13 @@ class SpendingByGeographyViewSet(DisasterBase):
             if population:
                 per_capita = (Decimal(x["amount"]) / Decimal(population)).quantize(Decimal(".01"))
 
+            name = f"{x[state_lookup]}-{pad_codes(GeoLayer.DISTRICT.value, x['recipient_location_congressional_code'])}"
+
             results.append(
                 {
                     "shape_code": shape_code,
                     "aggregated_amount": x["amount"],
-                    "display_name": x[state_lookup]
-                    + "-"
-                    + pad_codes(GeoLayer.DISTRICT.value, x["recipient_location_congressional_code"]),
+                    "display_name": name,
                     "population": population,
                     "per_capita": per_capita,
                 }
@@ -252,16 +253,56 @@ class SpendingByGeographyViewSet(DisasterBase):
             "county": F("recipient_location_county_code"),
             "state": F("recipient_location_state_code"),
         }
-        # fields = [
-        #     "recipient_location_congressional_code",
-        #     "recipient_location_country_code",
-        #     "recipient_location_state_code",
-        #     "recipient_location_county_code",
-        #     "recipient_location_county_name",
-        # ]
 
         return (
             LoanAwardSearchMatview.objects.annotate(
+                include=Exists(FinancialAccountsByAwards.objects.filter(*filters).values("award_id"))
+            )
+            .filter(include=True, recipient_location_country_code="USA")
+            .values(
+                "recipient_location_congressional_code",
+                "recipient_location_county_code",
+                "recipient_location_state_code",
+            )
+            .annotate(**annotations)
+            .values(*annotations.keys())
+        )
+
+    @property
+    def outlay_queryset(self):
+        return self.account_queryset(True)
+
+    @property
+    def obligation_queryset(self):
+        return self.account_queryset(False)
+
+    def account_queryset(self, is_outlay):
+        filters = [
+            Q(award_id=OuterRef("award_id")),
+            Q(disaster_emergency_fund__in=self.def_codes),
+            Q(award_id__isnull=False),
+        ]
+        filters.extend(
+            submission_window_cutoff(
+                self.reporting_period_min,
+                self.last_closed_monthly_submission_dates,
+                self.last_closed_quarterly_submission_dates,
+            )
+        )
+
+        annotations = {
+            "district": F("recipient_location_congressional_code"),
+            "county": F("recipient_location_county_code"),
+            "state": F("recipient_location_state_code"),
+        }
+
+        if is_outlay:
+            annotations["amount"] = Coalesce(Sum("account_award__gross_outlay_amount_by_award_cpe"), 0)
+        else:
+            annotations["amount"] = Coalesce(Sum("account_award__transaction_obligated_amount"), 0)
+
+        return (
+            AwardSearchView.objects.annotate(
                 include=Exists(FinancialAccountsByAwards.objects.filter(*filters).values("award_id"))
             )
             .filter(include=True, recipient_location_country_code="USA")

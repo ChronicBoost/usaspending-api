@@ -8,6 +8,7 @@ class FinancialAccountsByAwards(DataSourceTrackedModel):
     treasury_account = models.ForeignKey("accounts.TreasuryAppropriationAccount", models.CASCADE, null=True)
     submission = models.ForeignKey("submissions.SubmissionAttributes", models.CASCADE)
     award = models.ForeignKey("awards.Award", models.CASCADE, null=True, related_name="financial_set")
+    # award = models.ForeignKey("search.AwardSearchMatview", on_delete=models.DO_NOTHING, to_field="award_id", related_name="account_award")
     program_activity = models.ForeignKey("references.RefProgramActivity", models.DO_NOTHING, null=True, db_index=True)
     object_class = models.ForeignKey("references.ObjectClass", models.DO_NOTHING, null=True, db_index=True)
     piid = models.TextField(blank=True, null=True)
